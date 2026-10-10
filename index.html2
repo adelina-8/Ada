@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DailyBudget</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<style>
+:root{--bg:#fff;--fg:#14213d;--mut:#5b6785;--line:#dde3ee;--card:#f6f8fc;--navy:#14213d;--green:#14804a;--red:#b42318;--amb:#b45309}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1424;--fg:#e8edf8;--mut:#9aa6c4;--line:#27314d;--card:#161e35;--navy:#8fb0ff;--green:#4ade80;--red:#f87171;--amb:#fbbf24}}
+*{box-sizing:border-box}body{margin:0;font:16px/1.5 Georgia,serif;background:var(--bg);color:var(--fg)}
+h1,h2,h3,button,input,select,label,nav{font-family:system-ui,sans-serif}
+button,input,select{font-size:15px;padding:9px 12px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
+button{cursor:pointer;background:var(--navy);color:var(--bg);border:0;font-weight:600}button.g{background:transparent;color:var(--fg);border:1px solid var(--line)}
+button.d{background:var(--red);color:#fff}:focus-visible{outline:3px solid var(--green);outline-offset:2px}
+.wrap{max-width:1000px;margin:auto;padding:20px}.logo{font:700 22px system-ui;color:var(--navy)}.logo b{color:var(--green)}
+#app{display:grid;grid-template-columns:200px 1fr;min-height:100vh}nav{border-right:1px solid var(--line);padding:16px;display:flex;flex-direction:column;gap:6px}
+nav button{text-align:left;background:none;color:var(--fg)}nav button.on{background:var(--card);border:1px solid var(--line)}main{padding:20px;min-width:0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:12px}
+.big{font:700 26px system-ui}.pos{color:var(--green)}.neg{color:var(--red)}.mut{color:var(--mut);font-size:14px}
+.bar{height:12px;background:var(--line);border-radius:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--green)}
+table{width:100%;border-collapse:collapse;font:14px system-ui}td,th{padding:7px;border-bottom:1px solid var(--line);text-align:left}
+.tbl{overflow-x:auto}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+dialog{border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);width:min(420px,92vw)}
+dialog label{display:block;margin:8px 0;font-size:14px}dialog input,dialog select{width:100%}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--navy);color:var(--bg);padding:10px 16px;border-radius:8px;font:14px system-ui;display:none;z-index:9}
+.hide{display:none!important}.cols{display:flex;align-items:flex-end;gap:3px;height:120px}.cols div{flex:1;background:var(--navy);min-width:4px;border-radius:3px 3px 0 0}
+@media(max-width:700px){#app{grid-template-columns:1fr}nav{flex-direction:row;overflow-x:auto;border:0;border-bottom:1px solid var(--line)}nav .logo{display:none}}
+</style></head><body>
+<div id="land" class="wrap">
+ <div class="row"><span class="logo">Daily<b>Budget</b></span></div>
+ <h1 style="font-size:40px;margin:30px 0 8px">Know what you can spend today.</h1>
+ <p class="mut" style="max-width:560px">Enter your income and expenses by hand, set a daily limit, track bills and savings goals. Your data is private to your account.</p>
+ <div class="row"><button onclick="authOpen('up')">Sign up</button><button class="g" onclick="authOpen('in')">Log in</button></div>
+ <div class="grid" style="margin-top:24px">
+  <div class="card"><h3>Daily limit</h3>Progress bar with 50%, 80% and 100% warnings.</div>
+  <div class="card"><h3>Budgets and bills</h3>Category limits, due dates, overdue alerts.</div>
+  <div class="card"><h3>Savings goals</h3>Track progress toward what matters.</div>
+  <div class="card"><h3>Privacy</h3>Database rules keep each account's records separate. No bank logins or card numbers are stored. This site's source is public; your data is not.</div></div>
+</div>
+<div id="app" class="hide"><nav id="nav"><span class="logo">Daily<b>Budget</b></span></nav><main id="main"></main></div>
+<dialog id="dlg"></dialog><div id="toast" role="status"></div>
+<script>
+// ===== CONFIG: paste your PUBLIC values (never the service_role key) =====
+const SUPABASE_URL='YOUR_SUPABASE_URL', SUPABASE_KEY='YOUR_SUPABASE_ANON_OR_PUBLISHABLE_KEY';
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+const INC=['Salary','Business income','Freelance','Gifts','Refunds','Other income'];
+const EXP=['Rent or mortgage','Groceries','Restaurants','Transportation','Fuel','Utilities','Phone and internet','Healthcare','Education','Shopping','Family expenses','Insurance','Debt payments','Subscriptions','Entertainment','Other expenses'];
+const PAY=['cash','debit card','credit card','bank transfer','other'];
+let U=null,S={tx:[],bud:[],bills:[],goals:[],pref:{currency:'USD',daily_limit:0,rollover:false}},tab='Dashboard',F={q:'',type:'',from:'',to:''};
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const iso=d=>{const x=new Date(d);return new Date(x-x.getTimezoneOffset()*6e4).toISOString().slice(0,10)};
+const today=()=>iso(new Date()),mon=()=>today().slice(0,7);
+const money=n=>new Intl.NumberFormat(undefined,{style:'currency',currency:S.pref.currency||'USD'}).format(n||0);
+const sum=a=>a.reduce((s,x)=>s+Number(x.amount),0);
+function toast(m,bad){const t=$('toast');t.textContent=m;t.style.background=bad?'var(--red)':'';t.style.color=bad?'#fff':'';t.style.display='block';setTimeout(()=>t.style.display='none',3500)}
+function fail(e){toast(e&&e.message?e.message:'Something went wrong. Try again.',true)}
+// generic form dialog
+function ask(title,fields,vals,cb){const d=$('dlg');
+ d.innerHTML=`<form method="dialog"><h3>${esc(title)}</h3>`+fields.map(f=>{const v=vals?.[f.k]??f.def??'';
+ const inp=f.opts?`<select name="${f.k}">${f.opts.map(o=>`<option ${String(o)==String(v)?'selected':''}>${esc(o)}</option>`).join('')}</select>`
+ :f.type=='check'?`<input type="checkbox" name="${f.k}" ${v?'checked':''} style="width:auto">`
+ :`<input name="${f.k}" type="${f.type||'text'}" value="${esc(v)}" ${f.step?'step="0.01" min="0"':''} ${f.req?'required':''}>`;
+ return`<label>${esc(f.label)}${inp}</label>`}).join('')+`<div class="row"><button value="ok">Save</button><button type="button" class="g" onclick="$('dlg').close()">Cancel</button></div></form>`;
+ d.querySelector('form').onsubmit=async e=>{e.preventDefault();const o={};
+  fields.forEach(f=>{const el=d.querySelector(`[name=${f.k}]`);o[f.k]=f.type=='check'?el.checked:el.value.trim()});
+  try{await cb(o);d.close()}catch(x){fail(x)}};d.showModal()}
+function sure(m){return confirm(m)}
+// validation
+function amt(v){const n=Number(v);if(!isFinite(n)||n<=0||n>=1e10)throw Error('Enter an amount greater than 0.');return Math.round(n*100)/100}
+function dt(v){if(!/^\d{4}-\d{2}-\d{2}$/.test(v)||isNaN(new Date(v)))throw Error('Enter a valid date.');return v}
+// auth
+function authOpen(m){ask(m=='up'?'Create account':'Log in',[{k:'email',label:'Email',type:'email',req:1},{k:'pw',label:'Password (8+ characters)',type:'password',req:1}],{},async o=>{
+ if(o.pw.length<8)throw Error('Password must be at least 8 characters.');
+ if(m=='up'){const{error}=await sb.auth.signUp({email:o.email,password:o.pw,options:{emailRedirectTo:location.origin+location.pathname}});if(error)throw error;toast('Account created. Check your email if confirmation is required.')}
+ else{const{error}=await sb.auth.signInWithPassword({email:o.email,password:o.pw});if(error)throw error}});
+ const r=document.createElement('button');r.type='button';r.className='g';r.textContent='Forgot password?';r.onclick=()=>ask('Reset password',[{k:'email',label:'Email',type:'email',req:1}],{},async o=>{const{error}=await sb.auth.resetPasswordForEmail(o.email,{redirectTo:location.origin+location.pathname});if(error)throw error;toast('If that email exists, a reset link was sent.')});
+ if(m=='in')$('dlg').querySelector('.row').append(r)}
+sb.auth.onAuthStateChange(async(ev,s)=>{
+ if(ev=='PASSWORD_RECOVERY'){ask('Set new password',[{k:'pw',label:'New password',type:'password',req:1}],{},async o=>{if(o.pw.length<8)throw Error('Use 8+ characters.');const{error}=await sb.auth.updateUser({password:o.pw});if(error)throw error;toast('Password updated')})}
+ U=s?.user||null;$('land').classList.toggle('hide',!!U);$('app').classList.toggle('hide',!U);
+ if(U){setTimeout(boot,0)}else{S.tx=S.bud=S.bills=S.goals=[]}});
+async function boot(){try{
+ const[t,b,bi,g,p]=await Promise.all(['transactions','budgets','bills','goals','preferences'].map(n=>sb.from(n).select('*')));
+ for(const r of[t,b,bi,g,p])if(r.error)throw r.error;
+ S.tx=t.data;S.bud=b.data;S.bills=bi.data;S.goals=g.data;
+ if(p.data[0])S.pref=p.data[0];else await sb.from('preferences').insert({});
+ await sb.from('profiles').upsert({id:U.id});
+ drawNav();render()}catch(e){fail(e)}}
+const TABS=['Dashboard','Transactions','Budgets','Bills','Goals','Reports','Settings'];
+function drawNav(){$('nav').innerHTML='<span class="logo">Daily<b>Budget</b></span>'+TABS.map(t=>`<button class="${t==tab?'on':''}" onclick="tab='${t}';drawNav();render()">${t}</button>`).join('')}
+function render(){const m=$('main');m.innerHTML='';({Dashboard:vDash,Transactions:vTx,Budgets:vBud,Bills:vBills,Goals:vGoals,Reports:vRep,Settings:vSet})[tab](m)}
+// calculations
+const exp=a=>a.filter(x=>x.type=='expense'),inc=a=>a.filter(x=>x.type=='income');
+const spentOn=d=>sum(exp(S.tx.filter(x=>x.tx_date==d)));
+function dailyInfo(){const lim=Number(S.pref.daily_limit)||0;let carry=0;
+ if(S.pref.rollover&&lim>0){const y=iso(new Date(Date.now()-864e5));carry=Math.max(0,lim-spentOn(y))} // rollover = only yesterday's unused amount
+ const eff=lim+carry,sp=spentOn(today());return{lim,carry,eff,sp,left:eff-sp,pct:eff>0?sp/eff*100:0}}
+function bar(p,c){const col=p>=100?'var(--red)':p>=80?'var(--amb)':'var(--green)';return`<div class="bar"><i style="width:${Math.min(100,p)}%;background:${col}"></i></div>`}
+function warn(p,lim){if(lim<=0)return'No daily limit set. Add one in Settings.';return p>100?'Over budget today.':p==100?'You have reached 100% of today\'s budget.':p>=80?'80% of today\'s budget used.':p>=50?'50% of today\'s budget used.':'On track.'}
+function daysOverBars(n){const out=[];for(let i=n-1;i>=0;i--){const d=iso(new Date(Date.now()-i*864e5));out.push([d,spentOn(d)])}return out}
+function cols(arr){const mx=Math.max(1,...arr.map(a=>a[1]));return`<div class="cols">${arr.map(a=>`<div title="${esc(a[0])}: ${money(a[1])}" style="height:${a[1]/mx*100}%"></div>`).join('')}</div>`}
+function catTotals(list){const o={};exp(list).forEach(x=>o[x.category]=(o[x.category]||0)+Number(x.amount));return Object.entries(o).sort((a,b)=>b[1]-a[1])}
+// views
+function vDash(m){const d=dailyInfo(),mo=S.tx.filter(x=>x.tx_date.startsWith(mon()));
+ const bal=sum(inc(S.tx))-sum(exp(S.tx)),up=S.bills.filter(b=>b.status=='unpaid').sort((a,b)=>a.due_date<b.due_date?-1:1).slice(0,4);
+ const saved=S.goals.reduce((s,g)=>s+Number(g.saved_amount),0);
+ m.innerHTML=`<h2>Dashboard</h2>${!S.tx.length?'<div class="card">Welcome. Add your first transaction in Transactions to see your numbers here.</div>':''}
+ <div class="grid"><div class="card"><div class="mut">Account balance (income − expenses)</div><div class="big ${bal<0?'neg':'pos'}">${money(bal)}</div></div>
+ <div class="card"><div class="mut">Today's income</div><div class="big pos">${money(sum(inc(S.tx.filter(x=>x.tx_date==today()))))}</div></div>
+ <div class="card"><div class="mut">Today's expenses</div><div class="big">${money(d.sp)}</div></div>
+ <div class="card"><div class="mut">Remaining today</div><div class="big ${d.left<0?'neg':''}">${d.lim?money(d.left):'—'}</div></div>
+ <div class="card"><div class="mut">Month income</div><div class="big pos">${money(sum(inc(mo)))}</div></div>
+ <div class="card"><div class="mut">Month expenses</div><div class="big">${money(sum(exp(mo)))}</div></div>
+ <div class="card"><div class="mut">Savings goals (self-reported, not bank-verified)</div><div class="big pos">${money(saved)}</div></div></div>
+ <div class="card"><b>Daily budget</b> <span class="mut">${d.lim?money(d.eff)+(d.carry?' incl. '+money(d.carry)+' rolled over':''):''}</span>${bar(d.pct)}<div class="mut">${d.lim?Math.round(d.pct)+'% used. ':''}${warn(Math.round(d.pct),d.lim)}</div></div>
+ <div class="card"><b>Daily spending, last 14 days</b>${cols(daysOverBars(14))}</div>
+ <div class="card"><b>Spending by category this month</b>${catTotals(mo).map(([c,v])=>`<div class="mut">${esc(c)} ${money(v)}</div>`).join('')||'<div class="mut">No expenses this month.</div>'}</div>
+ <div class="card"><b>Upcoming bills</b>${up.map(b=>`<div>${esc(b.name)} ${money(b.amount)} <span class="${b.due_date<today()?'neg':'mut'}">${b.due_date<today()?'overdue ':'due '}${b.due_date}</span></div>`).join('')||'<div class="mut">None.</div>'}</div>
+ <div class="card"><b>Recent transactions</b>${txTable([...S.tx].sort((a,b)=>b.tx_date<a.tx_date?-1:1).slice(0,5),false)}</div>`}
+function txTable(list,act){return`<div class="tbl"><table><tr><th>Date<th>Category<th>Description<th>Amount${act?'<th>':''}</tr>${list.map(x=>`<tr><td>${x.tx_date}<td>${esc(x.category)}<td>${esc(x.description)}<td class="${x.type=='income'?'pos':''}">${x.type=='income'?'+':'−'}${money(x.amount)}${act?`<td><button class="g" onclick="txForm('${x.id}')">Edit</button> <button class="g" onclick="txDel('${x.id}')">Delete</button>`:''}</tr>`).join('')||'<tr><td colspan=5 class="mut">Nothing here yet.</tr>'}</table></div>`}
+function txForm(id,pre){const x=S.tx.find(t=>t.id==id)||pre||{type:'expense',tx_date:today(),essential:true};
+ ask(id?'Edit transaction':'Add transaction',[{k:'type',label:'Type',opts:['expense','income']},{k:'amount',label:'Amount',type:'number',step:1,req:1},{k:'tx_date',label:'Date',type:'date',req:1},
+ {k:'category',label:'Category',opts:[...EXP,...INC]},{k:'description',label:'Description'},{k:'payment_method',label:'Payment method',opts:PAY},{k:'essential',label:'Essential',type:'check'},{k:'notes',label:'Notes'}],x,async o=>{
+ const row={type:o.type,amount:amt(o.amount),tx_date:dt(o.tx_date),category:o.type=='income'?(INC.includes(o.category)?o.category:'Other income'):(EXP.includes(o.category)?o.category:'Other expenses'),description:o.description,payment_method:o.payment_method,essential:o.essential,notes:o.notes,currency:S.pref.currency,updated_at:new Date().toISOString()};
+ const r=id?await sb.from('transactions').update(row).eq('id',id).select():await sb.from('transactions').insert(row).select();
+ if(r.error)throw r.error;if(id)S.tx=S.tx.map(t=>t.id==id?r.data[0]:t);else S.tx.push(r.data[0]);
+ const d=dailyInfo();if(row.type=='expense'&&row.tx_date==today()&&d.lim)toast(warn(Math.round(d.pct),d.lim));else toast('Saved');render()})}
+async function txDel(id){if(!sure('Delete this transaction? This cannot be undone.'))return;const{error}=await sb.from('transactions').delete().eq('id',id);if(error)return fail(error);S.tx=S.tx.filter(t=>t.id!=id);toast('Deleted');render()}
+function vTx(m){let l=S.tx.filter(x=>(!F.q||(x.description+x.category+(x.notes||'')).toLowerCase().includes(F.q.toLowerCase()))&&(!F.type||x.type==F.type)&&(!F.from||x.tx_date>=F.from)&&(!F.to||x.tx_date<=F.to));
+ l.sort((a,b)=>b.tx_date<a.tx_date?-1:1);
+ m.innerHTML=`<h2>Transactions</h2><div class="row"><button onclick="txForm()">Add transaction</button><input id="fq" placeholder="Search" value="${esc(F.q)}"><select id="ft"><option value="">All</option><option ${F.type=='income'?'selected':''}>income</option><option ${F.type=='expense'?'selected':''}>expense</option></select><input id="ff" type="date" value="${F.from}" aria-label="From"><input id="fe" type="date" value="${F.to}" aria-label="To"></div>${txTable(l,true)}`;
+ const up=()=>{F={q:$('fq').value,type:$('ft').value,from:$('ff').value,to:$('fe').value};vTx(m);$('fq').focus()};['fq'].forEach(i=>$(i).oninput=up);['ft','ff','fe'].forEach(i=>$(i).onchange=up)}
+function vBud(m){const mo=mon(),spent=Object.fromEntries(catTotals(S.tx.filter(x=>x.tx_date.startsWith(mo))));const bs=S.bud.filter(b=>b.month==mo);
+ m.innerHTML=`<h2>Budgets for ${mo}</h2><button onclick="budForm()">Set category budget</button><div style="margin-top:12px">${bs.map(b=>{const a=spent[b.category]||0,p=b.limit_amount>0?a/b.limit_amount*100:0;return`<div class="card"><b>${esc(b.category)}</b> ${money(a)} of ${money(b.limit_amount)} · left ${money(b.limit_amount-a)} · ${Math.round(p)}% ${p>=100?'<b class=neg>Over budget</b>':p>=80?'<b style="color:var(--amb)">Approaching limit</b>':''}${bar(p)}<div class="row" style="margin-top:8px"><button class="g" onclick="budForm('${b.id}')">Edit</button><button class="g" onclick="budDel('${b.id}')">Delete</button></div></div>`}).join('')||'<div class="card">No budgets this month yet.</div>'}</div>`}
+function budForm(id){const b=S.bud.find(x=>x.id==id)||{};ask('Category budget',[{k:'category',label:'Category',opts:EXP},{k:'limit_amount',label:'Monthly limit',type:'number',step:1,req:1}],b,async o=>{
+ const lim=Number(o.limit_amount);if(!isFinite(lim)||lim<0)throw Error('Enter a valid limit.');
+ const{data,error}=await sb.from('budgets').upsert({month:mon(),category:o.category,limit_amount:lim},{onConflict:'user_id,month,category'}).select();if(error)throw error;
+ S.bud=S.bud.filter(x=>x.id!=data[0].id&&!(x.month==mon()&&x.category==o.category));S.bud.push(data[0]);toast('Saved');render()})}
+async function budDel(id){if(!sure('Delete this budget?'))return;const{error}=await sb.from('budgets').delete().eq('id',id);if(error)return fail(error);S.bud=S.bud.filter(b=>b.id!=id);render()}
+function nextDue(d,r){const x=new Date(d+'T00:00:00');if(r=='weekly')x.setDate(x.getDate()+7);if(r=='monthly')x.setMonth(x.getMonth()+1);if(r=='annually')x.setFullYear(x.getFullYear()+1);return iso(x)}
+function vBills(m){const l=[...S.bills].sort((a,b)=>a.due_date<b.due_date?-1:1);
+ m.innerHTML=`<h2>Bills</h2><button onclick="billForm()">Add bill</button><div class="tbl" style="margin-top:12px"><table><tr><th>Name<th>Amount<th>Due<th>Repeats<th>Status<th></tr>${l.map(b=>{const od=b.status=='unpaid'&&b.due_date<today();return`<tr><td>${esc(b.name)}<td>${money(b.amount)}<td>${b.due_date}<td>${b.recurrence}<td class="${od?'neg':''}">${od?'overdue':b.status}<td><button onclick="billPay('${b.id}')">Mark paid</button> <button class="g" onclick="billForm('${b.id}')">Edit</button> <button class="g" onclick="billDel('${b.id}')">Delete</button></tr>`}).join('')||'<tr><td colspan=6 class="mut">No bills yet.</tr>'}</table></div><p class="mut">Marking a bill paid asks whether to also record an expense. The expense is linked to the bill, and nothing is created automatically.</p>`}
+function billForm(id){const b=S.bills.find(x=>x.id==id)||{due_date:today(),recurrence:'monthly'};ask('Bill',[{k:'name',label:'Name',req:1},{k:'amount',label:'Amount',type:'number',step:1,req:1},{k:'due_date',label:'Due date',type:'date',req:1},{k:'recurrence',label:'Repeats',opts:['none','weekly','monthly','annually']},{k:'notes',label:'Notes'}],b,async o=>{
+ if(!o.name)throw Error('Enter a name.');const row={name:o.name,amount:amt(o.amount),due_date:dt(o.due_date),recurrence:o.recurrence,notes:o.notes};
+ const r=id?await sb.from('bills').update(row).eq('id',id).select():await sb.from('bills').insert(row).select();if(r.error)throw r.error;
+ S.bills=id?S.bills.map(x=>x.id==id?r.data[0]:x):[...S.bills,r.data[0]];toast('Saved');render()})}
+async function billPay(id){const b=S.bills.find(x=>x.id==id);let tid=null;
+ if(confirm(`Also record a ${money(b.amount)} expense for today? (Cancel = mark paid only, e.g. already recorded)`)){const{data,error}=await sb.from('transactions').insert({type:'expense',amount:b.amount,tx_date:today(),category:/rent/i.test(b.name)?'Rent or mortgage':/phone|internet/i.test(b.name)?'Phone and internet':'Other expenses',description:b.name,currency:S.pref.currency}).select();if(error)return fail(error);S.tx.push(data[0]);tid=data[0].id}
+ const upd=b.recurrence=='none'?{status:'paid',last_paid_transaction_id:tid}:{due_date:nextDue(b.due_date,b.recurrence),status:'unpaid',last_paid_transaction_id:tid};
+ const{data,error}=await sb.from('bills').update(upd).eq('id',id).select();if(error)return fail(error);S.bills=S.bills.map(x=>x.id==id?data[0]:x);toast('Bill marked paid');render()}
+async function billDel(id){if(!sure('Delete this bill?'))return;const{error}=await sb.from('bills').delete().eq('id',id);if(error)return fail(error);S.bills=S.bills.filter(b=>b.id!=id);render()}
+function vGoals(m){m.innerHTML=`<h2>Savings goals</h2><p class="mut">Amounts are what you enter yourself. They are not verified by any bank.</p><button onclick="goalForm()">Add goal</button><div style="margin-top:12px">${S.goals.map(g=>{const p=g.saved_amount/g.target_amount*100;return`<div class="card"><b>${esc(g.name)}</b> ${money(g.saved_amount)} of ${money(g.target_amount)} · ${money(Math.max(0,g.target_amount-g.saved_amount))} to go · ${Math.round(p)}%${g.target_date?' · by '+g.target_date:''}${bar(Math.min(p,99.9))}<div class="row" style="margin-top:8px"><button class="g" onclick="goalForm('${g.id}')">Edit</button><button class="g" onclick="goalDel('${g.id}')">Delete</button></div></div>`}).join('')||'<div class="card">No goals yet. Try an emergency fund.</div>'}</div>`}
+function goalForm(id){const g=S.goals.find(x=>x.id==id)||{};ask('Goal',[{k:'name',label:'Name',req:1},{k:'target_amount',label:'Target amount',type:'number',step:1,req:1},{k:'saved_amount',label:'Saved so far',type:'number',step:1,def:0},{k:'target_date',label:'Target date',type:'date'},{k:'description',label:'Description'}],g,async o=>{
+ const sv=Number(o.saved_amount||0);if(!isFinite(sv)||sv<0)throw Error('Saved amount must be 0 or more.');
+ const row={name:o.name,target_amount:amt(o.target_amount),saved_amount:sv,target_date:o.target_date?dt(o.target_date):null,description:o.description};
+ const r=id?await sb.from('goals').update(row).eq('id',id).select():await sb.from('goals').insert(row).select();if(r.error)throw r.error;
+ S.goals=id?S.goals.map(x=>x.id==id?r.data[0]:x):[...S.goals,r.data[0]];toast('Saved');render()})}
+async function goalDel(id){if(!sure('Delete this goal?'))return;const{error}=await sb.from('goals').delete().eq('id',id);if(error)return fail(error);S.goals=S.goals.filter(g=>g.id!=id);render()}
+let R={from:iso(new Date(Date.now()-29*864e5)),to:today()};
+const inR=()=>S.tx.filter(x=>x.tx_date>=R.from&&x.tx_date<=R.to);
+function vRep(m){const l=inR(),i=sum(inc(l)),e=sum(exp(l)),cats=catTotals(l),days=[];
+ for(let d=new Date(R.from);iso(d)<=R.to&&days.length<366;d.setDate(d.getDate()+1))days.push([iso(d),spentOn(iso(d))]);
+ const bs=S.bud.filter(b=>b.month==mon()),sp=Object.fromEntries(catTotals(S.tx.filter(x=>x.tx_date.startsWith(mon()))));
+ m.innerHTML=`<h2>Reports</h2><div class="row"><input id="rf" type="date" value="${R.from}"><input id="rt" type="date" value="${R.to}"><button onclick="csv()">Export CSV</button></div>
+ <div class="grid"><div class="card">Income<div class="big pos">${money(i)}</div></div><div class="card">Expenses<div class="big">${money(e)}</div></div><div class="card">Net<div class="big ${i-e<0?'neg':'pos'}">${money(i-e)}</div></div></div>
+ <div class="card"><b>Daily expenses</b>${cols(days)}</div>
+ <div class="card"><b>Top categories</b>${cats.map(([c,v])=>`<div class="mut">${esc(c)} ${money(v)} (${Math.round(v/e*100)}%)${bar(v/e*100)}</div>`).join('')||'<div class="mut">No expenses in range.</div>'}</div>
+ <div class="card"><b>Budget vs actual (this month)</b>${bs.map(b=>`<div class="mut">${esc(b.category)}: ${money(sp[b.category]||0)} / ${money(b.limit_amount)}</div>`).join('')||'<div class="mut">No budgets set.</div>'}</div>
+ <div class="card"><b>Goal progress</b>${S.goals.map(g=>`<div class="mut">${esc(g.name)} ${Math.round(g.saved_amount/g.target_amount*100)}%${bar(g.saved_amount/g.target_amount*100)}</div>`).join('')||'<div class="mut">No goals.</div>'}</div>
+ <div class="card"><b>Insights</b>${insights().map(t=>`<div>${esc(t)}</div>`).join('')||'<div class="mut">Add more transactions to see insights.</div>'}</div>`;
+ $('rf').onchange=$('rt').onchange=()=>{R={from:$('rf').value||R.from,to:$('rt').value||R.to};vRep(m)}}
+function insights(){const out=[],cur=mon(),pd=new Date();pd.setDate(1);pd.setMonth(pd.getMonth()-1);const prev=iso(pd).slice(0,7);
+ const a=Object.fromEntries(catTotals(S.tx.filter(x=>x.tx_date.startsWith(cur)))),b=Object.fromEntries(catTotals(S.tx.filter(x=>x.tx_date.startsWith(prev))));
+ for(const c in a)if(b[c]&&a[c]>b[c])out.push(`You spent ${money(a[c]-b[c])} more on ${c} this month than last month.`);
+ S.bud.filter(x=>x.month==cur&&x.limit_amount>0).forEach(x=>{const p=(a[x.category]||0)/x.limit_amount*100;if(p>=80)out.push(`You have used ${Math.round(p)}% of your ${x.category} budget.`)});
+ const ne=sum(exp(S.tx.filter(x=>x.tx_date.startsWith(cur)&&!x.essential)));if(ne>0)out.push(`Non-essential spending this month: ${money(ne)}.`);return out}
+function csvCell(v){let s=String(v??'');if(/^[=+\-@\t\r]/.test(s))s="'"+s;return'"'+s.replace(/"/g,'""')+'"'}
+function csv(){const rows=[['date','type','amount','currency','category','description','payment_method','essential','notes'],...inR().map(x=>[x.tx_date,x.type,x.amount,x.currency,x.category,x.description,x.payment_method,x.essential,x.notes])];
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(csvCell).join(',')).join('\n')],{type:'text/csv'}));a.download='dailybudget.csv';a.click()}
+function vSet(m){m.innerHTML=`<h2>Settings</h2><div class="card"><div class="mut">Signed in as ${esc(U.email)}</div></div>
+ <div class="card"><button onclick="prefForm()">Daily limit, rollover, currency</button><p class="mut">Rollover adds only yesterday's unused daily budget to today's limit.</p></div>
+ <div class="row"><button class="g" onclick="sb.auth.signOut()">Log out</button><button class="d" onclick="delAcct()">Delete account and all data</button></div>`}
+function prefForm(){ask('Preferences',[{k:'daily_limit',label:'Daily spending limit',type:'number',step:1,def:0},{k:'currency',label:'Currency',opts:['USD','EUR','GBP','CAD','AUD','SEK']},{k:'rollover',label:'Roll over unused budget from yesterday',type:'check'}],S.pref,async o=>{
+ const l=Number(o.daily_limit||0);if(!isFinite(l)||l<0)throw Error('Enter a valid limit.');
+ const{data,error}=await sb.from('preferences').upsert({user_id:U.id,daily_limit:l,currency:o.currency,rollover:o.rollover,updated_at:new Date().toISOString()}).select();if(error)throw error;S.pref=data[0];toast('Saved');render()})}
+async function delAcct(){if(!sure('Permanently delete your account and ALL data? This cannot be undone.'))return;const{error}=await sb.rpc('delete_my_account');if(error)return fail(error);await sb.auth.signOut();toast('Account deleted')}
+</script></body></html>
